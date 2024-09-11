@@ -1,8 +1,7 @@
 import subprocess
-import msal
 import os
+from threading import Thread
 from dotenv import load_dotenv
-
 
 load_dotenv()
 
@@ -12,53 +11,67 @@ class EMSWrapper:
     def __init__(self):
         self.connect()
 
-    def get_token(self):
-        app = msal.ConfidentialClientApplication(
-            client_id=os.getenv("CLIENT_ID"),
-            authority=f"https://login.microsoftonline.com/{os.getenv('TENANT_ID')}",
-            client_credential=os.getenv("CLIENT_SECRET"),
-        )
-
-        return app.acquire_token_for_client(
-            scopes=["https://outlook.office365.com/.default"]
-        )["access_token"]
-
-    def read_output(self, ps_session):
-        output = ps_session.stdout.read(1)
-        while ps_session.poll() is None or output:
-            output += ps_session.stdout.read(1)
-            if output.endswith("\n"):
-                break
-        return output
+    def __del__(self):
+        self.disconnect()
 
     def connect(self):
-        ps_session = subprocess.Popen(
-            ["powershell", "-NoExit", "-Command", "-"],
+        self.ps_session = subprocess.Popen(
+            ["powershell"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
 
-        ps_session.stdin.write(
-            "Connect-ExchangeOnline -UserPrincipalName chief_kenny_officer@huskerly.onmicrosoft.com -AccessToken {}\n".format(
-                self.get_token()
+        self.ps_session.stdin.write(
+            "Connect-ExchangeOnline -CertificateThumbPrint {} -AppID {} -Organization {}\n".format(
+                os.getenv("CERT_THUMB"),
+                os.getenv("APP_ID"),
+                "Huskerly.onmicrosoft.com",
             )
         )
-        ps_session.stdin.flush()
-        output = ps_session.stdout.read(887)
+        self.ps_session.stdin.flush()
+        print(self.ps_session.stdout.read(1247))
+
+        print("connected")
+
+    def disconnect(self):
+        self.ps_session.stdin.write("Disconnect-ExchangeOnline -Confirm:$false")
+        self.ps_session.stdin.flush()
+
+        self.ps_session.stdin.write("exit\n")
+        self.ps_session.stdin.flush()
+
+        print(self.ps_session.communicate())
+
+    def read_output(self, output):
+        result = ""
+        while self.ps_session.poll() is None:
+            next = self.ps_session.stdout.read(1)
+            print(repr(next))
+            if next == "\n":
+                print("ends with new line")
+                break
+            result += next
+            if result.endswith("\n"):
+                print("ends with new lines")
+                break
+
+        output.append(result)
+
+    def invoke(self, command):
+        self.ps_session.stdin.write(command)
+        self.ps_session.stdin.flush()
+
+        # print(self.ps_session.communicate())
+
+        output = []
+        thread = Thread(target=self.read_output, args=(output,))
+        # thread.daemon = True
+        thread.start()
         print(output)
-        # print(self.read_output(ps_session))
-
-        # ps_session.stdin.write("Get-User\n")
-        # ps_session.stdin.flush()
-        # print(self.read_output(ps_session))
-
-        ps_session.stdin.write("exit\n")
-        ps_session.stdin.flush()
-
-        print(ps_session.communicate())
 
 
 if __name__ == "__main__":
     wrapper = EMSWrapper()
+    wrapper.invoke("echo 'test'")
